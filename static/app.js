@@ -17,7 +17,7 @@
     dirs: {},
     liveFilter: 'all',
     trends: {},
-    trendPending: false,
+    trendPending: {},
     lastSignature: null,
   };
 
@@ -620,6 +620,8 @@
       return;
     }
     const pos = nodeLayout(g.nodes);
+    const graphWidth = Math.max(1080, ...Object.values(pos).map((p) => p.x + 140));
+    svg.setAttribute('viewBox', `0 0 ${graphWidth} 510`);
     const lines = g.edges.map((e) => {
       const a = pos[e.source];
       const b = pos[e.target];
@@ -635,7 +637,7 @@
         `<text x="8" y="15">${esc(label)}</text>` +
         `<text x="8" y="29" class="tiny">${esc(nodeDetail(n))}</text></g>`;
     }).join('');
-    svg.innerHTML = `<rect width="1080" height="510" fill="#0b1017"></rect>${lines}${nodes}`;
+    svg.innerHTML = `<rect width="${graphWidth}" height="510" fill="#0b1017"></rect>${lines}${nodes}`;
     $('graphMeta').textContent =
       `${g.nodes.length} объектов · ${g.edges.length} связей · нажмите на прямоугольник` +
       (g.truncated ? ' · показаны последние 320 событий журнала' : '');
@@ -740,8 +742,8 @@
   async function ensureTrend() {
     const days = state.days;
     if (state.trends[days]) { updateTrend(); return; }
-    if (state.trendPending) return;
-    state.trendPending = true;
+    if (state.trendPending[days]) return;
+    state.trendPending[days] = true;
     try {
       const wide = await getJSON('/api/snapshot?days=' + days * 2);
       if (!wide.error) {
@@ -750,7 +752,8 @@
         const t = { cur: 0, prev: 0 };
         for (const row of wide.daily || []) {
           const ts = new Date(row.day + 'T12:00:00').getTime();
-          const total = (Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0);
+          const total = (Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0) +
+            (Number(row.cache_read_tokens) || 0) + (Number(row.cache_write_tokens) || 0);
           if (ts >= curStart) t.cur += total;
           else if (ts >= prevStart) t.prev += total;
         }
@@ -761,7 +764,7 @@
       const el = $('trendLine');
       if (el) el.innerHTML = '<span class="trend flat">Сравнение с предыдущим периодом сейчас недоступно.</span>';
     } finally {
-      state.trendPending = false;
+      delete state.trendPending[days];
     }
   }
 
