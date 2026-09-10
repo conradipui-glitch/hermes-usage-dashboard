@@ -1,50 +1,86 @@
-# Hermes Usage Monitor
+# Hermes Usage Dashboard
 
-Локальный read-only дашборд для `state.db` и `logs/agent.log` Hermes Agent.
+Локальный read-only дашборд для анализа использования [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-## Запуск
+Дашборд собирает данные из `state.db` и `logs/agent.log`, показывает токены, модели, провайдеров, задачи и live-ленту событий — без изменения файлов Hermes и без отправки данных в интернет.
+
+## Возможности
+
+- периоды анализа: **1 / 7 / 30 / 90 дней**;
+- input, output, cache и reasoning tokens;
+- количество API-вызовов и оценка стоимости;
+- разбивка по `model × provider × task`;
+- последние запросы и сессии с сортировкой;
+- граф связей `session → request → API/tool/task/skill → subtask`;
+- live feed из `agent.log`;
+- автоматическое обнаружение новых tools и skills из сообщений Hermes;
+- обновление интерфейса при изменении базы или логов.
+
+## Быстрый запуск
+
+Требуется **Python 3.11+**. Внешние зависимости не нужны — используется только стандартная библиотека Python.
+
+### Windows
 
 ```text
-C:\Users\kato55\Documents\Codex\hermes-usage-dashboard\start-dashboard.bat
+start-dashboard.bat
 ```
 
-Или из каталога проекта:
+### Любая платформа
 
 ```bash
 python server.py --port 8765
 ```
 
-Откройте `http://127.0.0.1:8765/`.
+После запуска откройте [http://127.0.0.1:8765/](http://127.0.0.1:8765/).
 
-Параметры:
+## Параметры запуска
 
 ```bash
 python server.py --help
 python server.py --hermes-home C:/path/to/.hermes --poll-ms 2000 --no-open
 ```
 
-## Что читает монитор
+| Параметр | Назначение |
+| --- | --- |
+| `--port` | Порт локального сервера |
+| `--hermes-home` | Каталог Hermes с `state.db` и `logs/` |
+| `--poll-ms` | Интервал проверки изменений файлов |
+| `--no-open` | Не открывать браузер автоматически |
 
-- `state.db` открывается SQLite в `mode=ro` с `PRAGMA query_only=ON`.
-- `agent.log` и `agent.log.1` читаются только для строк API-вызовов и tool events.
-- Ключи API, `.env` и конфигурационные секреты не читаются.
-- Hermes не изменяется, дополнительный лог не создаётся.
+## Безопасность и режим read-only
 
-Frontend каждые 2 секунды проверяет только `mtime/size` `state.db`, `state.db-wal`, `state.db-shm` и логов. Полный SQL-запрос выполняется только после изменения сигнатуры. Фиксированного интервала записи логов у Hermes нет: события коммитятся по ходу API/tool-вызовов, а token accounting может попасть в SQLite с небольшой асинхронной задержкой.
+- открывает SQLite с `mode=ro` и включает `PRAGMA query_only=ON`;
+- не изменяет `state.db`, WAL-файлы или логи Hermes;
+- не читает API-ключи, `.env` и конфигурационные секреты;
+- не создаёт дополнительные логи;
+- не требует сетевого API и сторонних сервисов.
 
-## Данные
-
-- периоды 1/7/30/90 дней;
-- токены input/output/cache/reasoning, API calls, estimated/actual cost;
-- модель × provider × task;
-- инструменты и навыки извлекаются динамически из `messages`, поэтому новый реально вызванный tool появляется без изменения кода дашборда;
-- список последних запросов/сессий с сортировкой;
-- карта `session → request → API/tool/task/skill → subtask`;
-- live feed из agent log.
+Frontend сначала проверяет только `mtime/size` базы и логов. Полный запрос выполняется лишь после обнаружения изменения.
 
 ## Важное ограничение атрибуции
 
-Hermes хранит точные токены каждого основного API-вызова в строках `agent.log`, а в `state.db` — агрегаты по `(session, model, provider, task)`. Поэтому карта и live feed показывают per-call tokens, а стоимость и task/model totals берутся из агрегатов. Стоимость на отдельный API request намеренно не выдумывается. Для полной per-request cost attribution нужен отдельный append-only usage event в Hermes.
+Hermes хранит точные токены отдельных основных API-вызовов в `agent.log`, а агрегаты — в `state.db` по `(session, model, provider, task)`.
+
+Поэтому:
+
+- карта и live feed показывают per-call tokens;
+- стоимость и totals по task/model берутся из агрегатов;
+- стоимость отдельного API-запроса намеренно не вычисляется искусственно.
+
+Для полной per-request cost attribution нужен отдельный append-only usage event в Hermes.
+
+## Структура проекта
+
+```text
+hermes-usage-dashboard/
+├── hermes_usage.py          # чтение SQLite, парсинг логов и подготовка snapshot
+├── server.py                # локальный HTTP-сервер и API дашборда
+├── static/index.html        # frontend
+├── tests/                   # автоматические тесты
+├── requirements.txt         # зависимости (только стандартная библиотека)
+└── start-dashboard.bat      # запуск в Windows
+```
 
 ## Проверка
 
@@ -52,3 +88,7 @@ Hermes хранит точные токены каждого основного 
 python -m unittest discover -s tests -v
 python -m py_compile hermes_usage.py server.py
 ```
+
+## Лицензия
+
+Лицензия в репозитории пока не задана.
