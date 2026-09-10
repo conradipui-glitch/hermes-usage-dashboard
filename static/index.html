@@ -3,329 +3,187 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hermes Usage Monitor</title>
-  <style>
-    :root {
-      --bg: #0a0d12;
-      --panel: #10151d;
-      --panel-2: #141b25;
-      --panel-3: #0d1219;
-      --line: #263241;
-      --line-soft: #1b2531;
-      --text: #eef3f8;
-      --muted: #8c9aaa;
-      --dim: #5e6c7d;
-      --cyan: #5dd6d0;
-      --blue: #7da8ff;
-      --amber: #e6b86a;
-      --pink: #df89bb;
-      --green: #73d49e;
-      --red: #ff7f89;
-      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-      --sans: "Segoe UI", Inter, system-ui, sans-serif;
-    }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
-    body { font-size: 13px; }
-    button, select { font: inherit; }
-    button { cursor: pointer; }
-    .shell { max-width: 1800px; margin: 0 auto; padding: 20px 24px 36px; }
-    .topbar { display: flex; gap: 18px; align-items: center; justify-content: space-between; margin-bottom: 18px; }
-    .brand { display: flex; gap: 12px; align-items: center; }
-    .mark { width: 30px; height: 30px; border: 1px solid var(--cyan); display: grid; place-items: center; color: var(--cyan); font-weight: 700; letter-spacing: -2px; }
-    h1 { margin: 0; font-size: 18px; letter-spacing: .02em; font-weight: 650; }
-    .subtitle { color: var(--muted); margin-top: 3px; font-size: 12px; }
-    .toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; align-items: center; }
-    .btn, .select { color: var(--text); border: 1px solid var(--line); background: var(--panel); min-height: 32px; padding: 0 10px; border-radius: 3px; }
-    .btn:hover, .select:hover { border-color: var(--cyan); }
-    .btn.active { color: var(--bg); border-color: var(--cyan); background: var(--cyan); }
-    .btn.ghost { color: var(--muted); }
-    .live { display: inline-flex; gap: 7px; align-items: center; color: var(--muted); padding: 0 5px; }
-    .dot { width: 7px; height: 7px; background: var(--green); border-radius: 50%; box-shadow: 0 0 10px var(--green); }
-    .dot.warn { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
-    .dot.err { background: var(--red); box-shadow: 0 0 10px var(--red); }
-    .filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; margin-bottom: 14px; border: 1px solid var(--line-soft); background: var(--panel-3); }
-    .filters label { color: var(--dim); font-size: 11px; display: flex; align-items: center; gap: 6px; }
-    .select { min-height: 30px; color: var(--muted); }
-    .kpis { display: grid; grid-template-columns: repeat(6, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
-    .kpi, .panel { background: var(--panel); border: 1px solid var(--line); }
-    .kpi { padding: 13px 14px 12px; min-height: 86px; }
-    .kpi-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; }
-    .kpi-value { font-family: var(--mono); font-size: 21px; margin-top: 11px; letter-spacing: -.04em; }
-    .kpi-note { color: var(--dim); font-size: 11px; margin-top: 4px; }
-    .grid-2 { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr); gap: 14px; margin-bottom: 14px; }
-    .grid-3 { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr) minmax(0, .8fr); gap: 14px; margin-bottom: 14px; }
-    .panel-head { min-height: 48px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; gap: 10px; }
-    .panel-title { font-size: 13px; font-weight: 650; letter-spacing: .03em; }
-    .panel-meta { color: var(--dim); font-size: 11px; }
-    .panel-body { padding: 14px; }
-    .chart { min-height: 218px; display: flex; flex-direction: column; gap: 10px; }
-    .bars { height: 172px; display: flex; align-items: stretch; gap: 4px; border-bottom: 1px solid var(--line); padding: 0 3px; }
-    .bar-cell { flex: 1; display: flex; align-items: flex-end; min-width: 4px; position: relative; }
-    .bar-stack { width: 100%; min-height: 1px; display: flex; flex-direction: column; justify-content: flex-end; }
-    .bar-in { background: var(--blue); opacity: .82; min-height: 1px; }
-    .bar-out { background: var(--cyan); opacity: .88; min-height: 1px; }
-    .bar-cell:hover .bar-tip { opacity: 1; transform: translate(-50%, -4px); }
-    .bar-tip { position: absolute; bottom: 100%; left: 50%; opacity: 0; transform: translate(-50%, 2px); transition: .14s ease; background: #202a37; border: 1px solid var(--line); padding: 6px 8px; white-space: nowrap; color: var(--text); z-index: 3; pointer-events: none; font-size: 11px; }
-    .chart-axis { display: flex; justify-content: space-between; color: var(--dim); font-family: var(--mono); font-size: 10px; }
-    .legend { display: flex; gap: 13px; color: var(--muted); font-size: 11px; }
-    .legend i { width: 8px; height: 8px; display: inline-block; margin-right: 5px; }
-    .live-list { max-height: 218px; overflow: auto; }
-    .event { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
-    .event:last-child { border-bottom: 0; }
-    .event-time { color: var(--dim); font-family: var(--mono); font-size: 10px; }
-    .event-main { min-width: 0; }
-    .event-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .event-sub { color: var(--muted); font-size: 11px; margin-top: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .badge { display: inline-block; border: 1px solid var(--line); color: var(--muted); padding: 2px 5px; border-radius: 2px; font-size: 10px; font-family: var(--mono); white-space: nowrap; }
-    .badge.api { border-color: #3b638e; color: var(--blue); }
-    .badge.aux { border-color: #835f83; color: var(--pink); }
-    .badge.tool { border-color: #3e7f6b; color: var(--green); }
-    .table-wrap { overflow: auto; max-height: 390px; }
-    table { width: 100%; border-collapse: collapse; min-width: 720px; }
-    th { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; position: sticky; top: 0; background: var(--panel); z-index: 1; }
-    th button { color: inherit; text-transform: inherit; letter-spacing: inherit; border: 0; padding: 0; background: none; }
-    th button:hover { color: var(--cyan); }
-    td { padding: 9px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
-    tr.clickable { cursor: pointer; }
-    tr.clickable:hover, tr.selected { background: var(--panel-2); }
-    .mono { font-family: var(--mono); }
-    .muted { color: var(--muted); }
-    .dim { color: var(--dim); }
-    .right { text-align: right; }
-    .number { font-family: var(--mono); white-space: nowrap; }
-    .truncate { max-width: 410px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .empty { color: var(--dim); padding: 28px 0; text-align: center; }
-    .graph-shell { display: grid; grid-template-columns: minmax(0, 1fr) 280px; min-height: 510px; }
-    .graph-canvas { min-width: 0; overflow: auto; background: #0b1017; }
-    #graphSvg { width: 100%; min-width: 900px; height: 510px; display: block; }
-    .graph-edge { stroke: #354657; stroke-width: 1.2; opacity: .85; }
-    .graph-node { cursor: pointer; }
-    .graph-node rect { fill: var(--panel-2); stroke: var(--line); stroke-width: 1; rx: 3; }
-    .graph-node text { fill: var(--text); font-size: 11px; pointer-events: none; }
-    .graph-node .tiny { fill: var(--muted); font-family: var(--mono); font-size: 9px; }
-    .graph-node.session rect { stroke: var(--cyan); }
-    .graph-node.api rect { stroke: var(--blue); }
-    .graph-node.tool rect { stroke: var(--green); }
-    .graph-node.task rect { stroke: var(--amber); }
-    .graph-node.skill rect { stroke: var(--pink); }
-    .graph-node.request rect { stroke: #9cb3d7; }
-    .graph-node.selected rect { stroke-width: 2.5; filter: drop-shadow(0 0 5px rgba(93,214,208,.35)); }
-    .inspector { border-left: 1px solid var(--line-soft); padding: 14px; overflow: auto; background: var(--panel-3); }
-    .inspector h3 { margin: 0 0 12px; font-size: 12px; }
-    .kv { display: grid; grid-template-columns: 88px 1fr; gap: 6px 10px; margin: 0 0 14px; }
-    .kv dt { color: var(--dim); }
-    .kv dd { margin: 0; overflow-wrap: anywhere; }
-    pre.prompt { white-space: pre-wrap; color: var(--muted); background: #0a0e14; border: 1px solid var(--line-soft); padding: 9px; font: 11px/1.45 var(--mono); max-height: 180px; overflow: auto; }
-    .quality { color: var(--muted); font-size: 11px; padding: 10px 12px; border: 1px solid var(--line-soft); background: var(--panel-3); margin-bottom: 14px; }
-    .quality strong { color: var(--amber); }
-    .error { border-color: #75404a; color: var(--red); }
-    footer { color: var(--dim); font-size: 11px; padding-top: 15px; display: flex; justify-content: space-between; gap: 15px; }
-    @media (max-width: 1200px) { .kpis { grid-template-columns: repeat(3, 1fr); } .grid-3 { grid-template-columns: 1fr 1fr; } .grid-3 > :first-child { grid-column: 1 / -1; } }
-    @media (max-width: 780px) { .shell { padding: 14px; } .topbar { align-items: flex-start; flex-direction: column; } .toolbar { justify-content: flex-start; } .kpis { grid-template-columns: repeat(2, 1fr); } .grid-2, .grid-3 { grid-template-columns: 1fr; } .graph-shell { grid-template-columns: 1fr; } .inspector { border-left: 0; border-top: 1px solid var(--line-soft); } }
-  </style>
+  <meta name="description" content="Локальная панель использования ИИ-ассистента Hermes: разговоры, токены и стоимость — простыми словами.">
+  <title>Hermes — панель использования</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <main class="shell">
     <header class="topbar">
       <div class="brand">
-        <div class="mark">↯</div>
-        <div><h1>Hermes Usage Monitor</h1><div class="subtitle">read-only telemetry · state.db + rotating agent logs · local only</div></div>
+        <div class="mark" aria-hidden="true">↯</div>
+        <div>
+          <h1>Панель использования Hermes</h1>
+          <div class="subtitle">Чем занят ваш ИИ-ассистент: разговоры, токены и стоимость — простыми словами</div>
+        </div>
       </div>
       <div class="toolbar">
-        <div class="live"><span class="dot" id="statusDot"></span><span id="statusText">подключение…</span></div>
-        <button class="btn ghost" id="refreshBtn">Обновить</button>
-        <button class="btn active" data-days="1">1д</button>
-        <button class="btn" data-days="7">7д</button>
-        <button class="btn" data-days="30">30д</button>
-        <button class="btn" data-days="90">90д</button>
+        <div class="live" title="Панель сама проверяет данные каждые пару секунд и обновляется, когда файлы Hermes меняются">
+          <span class="dot" id="statusDot"></span><span id="statusText" aria-live="polite">подключение…</span>
+        </div>
+        <button type="button" class="btn ghost" id="refreshBtn" title="Перечитать данные прямо сейчас, не дожидаясь изменений">Обновить</button>
+        <button type="button" class="btn ghost" id="helpBtn" title="Открыть справку: что это за панель и как ей пользоваться">Справка</button>
+        <button type="button" class="btn ghost" id="tourBtn" title="Короткая экскурсия по всем блокам панели">🧭 Экскурсия</button>
+        <span class="toolbar-sep" aria-hidden="true"></span>
+        <button type="button" class="btn" data-days="1" title="Показать только сегодняшний день">Сегодня</button>
+        <button type="button" class="btn active" data-days="7" title="Последние 7 дней">7 дней</button>
+        <button type="button" class="btn" data-days="30" title="Последние 30 дней">30 дней</button>
+        <button type="button" class="btn" data-days="90" title="Последние 90 дней">90 дней</button>
       </div>
     </header>
 
+    <section class="welcome" id="welcomeCard" hidden>
+      <div class="welcome-head">
+        <div class="welcome-title">👋 Добро пожаловать! Это панель наблюдения за ИИ-ассистентом Hermes</div>
+        <button type="button" class="btn ghost" id="welcomeClose" title="Свернуть (вернуть можно кнопкой «Справка» сверху)">Свернуть</button>
+      </div>
+      <div class="welcome-body">
+        <div class="welcome-grid">
+          <div class="welcome-item"><b>🔍 Что здесь видно</b>Чем ассистент занимался, какие модели ИИ использовал, сколько токенов израсходовал и сколько это примерно стоит.</div>
+          <div class="welcome-item"><b>🔒 Данные — только ваши</b>Панель читает локальные файлы Hermes на вашем компьютере и ничего не отправляет в интернет. Режим «только чтение».</div>
+          <div class="welcome-item"><b>♻️ Обновляется сама</b>Пока панель открыта, цифры подтягиваются автоматически. Настраивать ничего не нужно.</div>
+          <div class="welcome-item"><b>❓ Подсказки повсюду</b>Везде, где встречается значок <button type="button" class="hint" data-hint="hintdemo" aria-label="Пример подсказки">?</button> — есть простое объяснение. Нажмите на него.</div>
+        </div>
+        <div class="welcome-actions">
+          <button type="button" class="btn primary" id="welcomeTour">▶ Пройти экскурсию (~1 минута)</button>
+          <button type="button" class="btn ghost" id="welcomeDismiss">Понятно, спасибо</button>
+        </div>
+      </div>
+    </section>
+
     <section class="filters" aria-label="Фильтры">
-      <label>Провайдер <select class="select" id="providerFilter"><option value="">все</option></select></label>
-      <label>Модель <select class="select" id="modelFilter"><option value="">все</option></select></label>
-      <label>Задача <select class="select" id="taskFilter"><option value="">все</option></select></label>
+      <span class="filters-title">Фильтры <button type="button" class="hint" data-hint="filters" aria-label="Что делают фильтры">?</button></span>
+      <label>Провайдер <button type="button" class="hint" data-hint="provider" aria-label="Что такое провайдер">?</button>
+        <select class="select" id="providerFilter"><option value="">все</option></select></label>
+      <label>Модель <button type="button" class="hint" data-hint="model" aria-label="Что такое модель">?</button>
+        <select class="select" id="modelFilter"><option value="">все</option></select></label>
+      <label>Задача <button type="button" class="hint" data-hint="task" aria-label="Что такое задача">?</button>
+        <select class="select" id="taskFilter"><option value="">все</option></select></label>
+      <button type="button" class="btn ghost" id="filterReset" hidden>Сбросить фильтры</button>
       <span class="panel-meta" id="periodMeta"></span>
     </section>
 
     <div id="notice"></div>
-    <section class="kpis" id="kpis"></section>
+
+    <section class="panel story" id="storyCard">
+      <div class="panel-head">
+        <div class="panel-title">Главное за период <button type="button" class="hint" data-hint="story" aria-label="Что это за блок">?</button></div>
+        <div class="panel-meta" id="storyMeta"></div>
+      </div>
+      <div class="panel-body story-body" id="storyBody"></div>
+    </section>
+
+    <section class="kpis" id="kpis" aria-label="Ключевые цифры"></section>
 
     <section class="grid-2">
-      <article class="panel">
-        <div class="panel-head"><div class="panel-title">Токены по дням</div><div class="legend"><span><i style="background:var(--blue)"></i>input</span><span><i style="background:var(--cyan)"></i>output</span></div></div>
-        <div class="panel-body"><div class="chart" id="dailyChart"></div></div>
+      <article class="panel" id="dailyPanel">
+        <div class="panel-head">
+          <div class="panel-title">Активность по дням <button type="button" class="hint" data-hint="daily" aria-label="Как читать график">?</button></div>
+          <div class="legend"><span><i style="background:var(--blue)"></i>прочитано ИИ</span><span><i style="background:var(--cyan)"></i>создано ИИ</span></div>
+        </div>
+        <div class="panel-body">
+          <div class="chart" id="dailyChart"></div>
+          <div class="panel-meta" id="dailyMeta"></div>
+        </div>
       </article>
-      <article class="panel">
-        <div class="panel-head"><div class="panel-title">Поток API / tool events</div><div class="panel-meta" id="eventMeta"></div></div>
-        <div class="panel-body"><div class="live-list" id="liveEvents"></div></div>
+      <article class="panel" id="livePanel">
+        <div class="panel-head">
+          <div class="panel-title">Живая лента событий <button type="button" class="hint" data-hint="live" aria-label="Что такое живая лента">?</button></div>
+          <div class="panel-meta" id="eventMeta"></div>
+        </div>
+        <div class="panel-body">
+          <div class="chips" id="liveChips"></div>
+          <div class="live-list" id="liveEvents"></div>
+        </div>
       </article>
     </section>
 
-    <section class="grid-3">
+    <section class="grid-3" id="tablesRow">
       <article class="panel">
-        <div class="panel-head"><div class="panel-title">Модель × провайдер × задача</div><div class="panel-meta">сортировка по заголовкам</div></div>
+        <div class="panel-head">
+          <div class="panel-title">Какие модели ИИ использовались <button type="button" class="hint" data-hint="models_table" aria-label="Как читать таблицу">?</button></div>
+          <div class="panel-meta">нажмите на столбец — сортировка</div>
+        </div>
         <div class="panel-body"><div class="table-wrap" id="modelTable"></div></div>
       </article>
       <article class="panel">
-        <div class="panel-head"><div class="panel-title">Подзадачи</div><div class="panel-meta">task attribution</div></div>
+        <div class="panel-head">
+          <div class="panel-title">На что уходили усилия <button type="button" class="hint" data-hint="tasks_table" aria-label="Как читать таблицу">?</button></div>
+          <div class="panel-meta">внутренние задачи ассистента</div>
+        </div>
         <div class="panel-body"><div class="table-wrap" id="taskTable"></div></div>
       </article>
       <article class="panel">
-        <div class="panel-head"><div class="panel-title">Инструменты</div><div class="panel-meta">обнаруживаются из state.db</div></div>
+        <div class="panel-head">
+          <div class="panel-title">Инструменты и навыки <button type="button" class="hint" data-hint="tool" aria-label="Что такое инструменты">?</button></div>
+          <div class="panel-meta" id="toolsMeta"></div>
+        </div>
         <div class="panel-body"><div class="table-wrap" id="toolTable"></div></div>
       </article>
     </section>
 
-    <section class="panel" style="margin-bottom:14px">
-      <div class="panel-head"><div class="panel-title">Запросы / сессии</div><div class="panel-meta" id="sessionMeta"></div></div>
+    <section class="panel" id="sessionPanel" style="margin-bottom:14px">
+      <div class="panel-head">
+        <div class="panel-title">Ваши разговоры с ассистентом <button type="button" class="hint" data-hint="sessions_table" aria-label="Как пользоваться таблицей">?</button></div>
+        <div class="panel-meta" id="sessionMeta"></div>
+      </div>
       <div class="panel-body"><div class="table-wrap" id="sessionTable"></div></div>
     </section>
 
-    <section class="panel" style="margin-bottom:14px">
-      <div class="panel-head"><div class="panel-title">Нодовая карта цепочки</div><div class="panel-meta" id="graphMeta">выберите сессию выше</div></div>
-      <div class="graph-shell"><div class="graph-canvas"><svg id="graphSvg" viewBox="0 0 1080 510" role="img" aria-label="Цепочка запроса"></svg></div><aside class="inspector" id="inspector"><div class="empty">Кликните по узлу карты.</div></aside></div>
+    <section class="panel" id="graphPanel" style="margin-bottom:14px">
+      <div class="panel-head">
+        <div class="panel-title">Карта разговора <button type="button" class="hint" data-hint="graph" aria-label="Как читать карту">?</button></div>
+        <div class="panel-meta" id="graphMeta"></div>
+      </div>
+      <div class="graph-legend" id="graphLegend">
+        <span><i style="background:var(--cyan)"></i>разговор</span>
+        <span><i style="background:#9cb3d7"></i>ваши сообщения</span>
+        <span><i style="background:var(--green)"></i>инструменты</span>
+        <span><i style="background:var(--blue)"></i>обращения к ИИ</span>
+        <span><i style="background:var(--amber)"></i>категории расходов</span>
+        <span><i style="background:var(--pink)"></i>навыки</span>
+        <span><i style="background:var(--violet)"></i>подзадачи</span>
+      </div>
+      <div class="graph-shell">
+        <div class="graph-canvas"><svg id="graphSvg" viewBox="0 0 1080 510" role="img" aria-label="Схема одного разговора с ассистентом"></svg></div>
+        <aside class="inspector" id="inspector"></aside>
+      </div>
     </section>
 
-    <footer><span id="sourceMeta">источник не прочитан</span><span>обновление: heartbeat, только после изменения файлов · без ключей API</span></footer>
+    <details class="details" id="qualityPanel">
+      <summary>Насколько точны эти цифры? <button type="button" class="hint" data-hint="quality" aria-label="Объяснение">?</button></summary>
+      <div class="details-body" id="qualityBody"></div>
+    </details>
+
+    <section class="glossary" id="glossary">
+      <h2>📖 Словарик: простые объяснения терминов</h2>
+      <div class="glossary-grid" id="glossaryGrid"></div>
+    </section>
+
+    <footer>
+      <span id="sourceMeta">источник не прочитан</span>
+      <span>режим «только чтение» · данные не покидают ваш компьютер</span>
+    </footer>
   </main>
 
-  <script>
-    const state = { days: 1, data: null, graph: null, sessionId: null, nodeId: null, filters: { provider: '', model: '', task: '' }, sorts: { model: 'total_tokens', task: 'total_tokens', tool: 'count', session: 'last_activity_at' }, dirs: {} };
-    const $ = (id) => document.getElementById(id);
-    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const fmt = new Intl.NumberFormat('ru-RU');
-    const money = (value) => value == null ? '—' : ('$' + Number(value || 0).toFixed(4));
-    const tokens = (value) => { const n = Number(value || 0); if (Math.abs(n) >= 1e9) return (n/1e9).toFixed(1)+'B'; if (Math.abs(n) >= 1e6) return (n/1e6).toFixed(1)+'M'; if (Math.abs(n) >= 1e3) return (n/1e3).toFixed(1)+'K'; return fmt.format(n); };
-    const fullTokens = (value) => fmt.format(Number(value || 0));
-    const date = (iso) => iso ? new Date(iso).toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
-    const time = (iso) => iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour:'2-digit', minute:'2-digit', second:'2-digit' }) : '—';
-    const val = (row, key) => row?.[key] ?? '';
-    async function getJSON(url) { const res = await fetch(url, { cache: 'no-store' }); const data = await res.json(); if (!res.ok) throw new Error(data.error || res.statusText); return data; }
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
 
-    function setStatus(kind, text) { $('statusDot').className = 'dot ' + (kind || ''); $('statusText').textContent = text; }
-    function sorted(rows, key) { const direction = state.dirs[key] || 'desc'; return [...rows].sort((a,b) => { const av = a[key] ?? ''; const bv = b[key] ?? ''; if (av === bv) return 0; const result = av > bv ? 1 : -1; return direction === 'asc' ? result : -result; }); }
-    function sortButton(label, key, scope) { return `<button data-sort="${esc(key)}" data-scope="${esc(scope)}">${esc(label)} ${state.sorts[scope] === key ? (state.dirs[key] === 'asc' ? '↑' : '↓') : '↕'}</button>`; }
-    function visibleModels() { const d = state.data; return (d?.models || []).filter(r => (!state.filters.provider || r.provider === state.filters.provider) && (!state.filters.model || r.model === state.filters.model) && (!state.filters.task || r.task === state.filters.task)); }
-    function visibleTasks() { const d = state.data; return (d?.tasks || []).filter(r => !state.filters.task || r.task === state.filters.task); }
+  <div id="tourOverlay" hidden>
+    <div id="tourSpot" aria-hidden="true"></div>
+    <div id="tourCard" role="dialog" aria-labelledby="tourTitle">
+      <div class="tour-step" id="tourStepLabel"></div>
+      <h3 id="tourTitle"></h3>
+      <p id="tourText"></p>
+      <div class="tour-actions">
+        <button type="button" class="btn ghost" id="tourSkip">Закрыть</button>
+        <div class="tour-nav">
+          <button type="button" class="btn ghost" id="tourPrev">← Назад</button>
+          <button type="button" class="btn primary" id="tourNext">Далее →</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
-    function renderFilters() {
-      const d = state.data; if (!d) return;
-      const options = (items, key) => [...new Set(items.map(x => x[key]).filter(Boolean))].sort();
-      const fill = (id, values, current, label) => { $(id).innerHTML = `<option value="">${label}</option>` + values.map(v => `<option value="${esc(v)}" ${v === current ? 'selected' : ''}>${esc(v)}</option>`).join(''); };
-      fill('providerFilter', options(d.models, 'provider'), state.filters.provider, 'все');
-      fill('modelFilter', options(d.models, 'model'), state.filters.model, 'все');
-      fill('taskFilter', options(d.tasks, 'task'), state.filters.task, 'все');
-      $('periodMeta').textContent = `период: ${state.days} дн. · фильтры локальные`;
-    }
-
-    function renderKpis() {
-      const s = state.data?.summary || {};
-      const items = [
-        ['Всего токенов', tokens(s.total_tokens), `${fullTokens(s.input_tokens)} in · ${fullTokens(s.output_tokens)} out`],
-        ['Cache read', tokens(s.cache_read_tokens), `${fullTokens(s.cache_read_tokens)} токенов`],
-        ['API calls', fmt.format(s.api_calls || 0), `${fmt.format(s.observed_api_log_events || 0)} строк в log`],
-        ['Сессии', fmt.format(s.sessions || 0), `${s.active_sessions || 0} активных · ${s.subtasks || 0} подзадач`],
-        ['Оценка', money(s.estimated_cost_usd), `${s.cost_statuses?.estimated || 0} aggregate rows`],
-        ['Фактическое', money(s.actual_cost_usd), s.actual_cost_usd ? 'provider-reported' : 'не записано'],
-      ];
-      $('kpis').innerHTML = items.map(([label, value, note]) => `<div class="kpi"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${esc(value)}</div><div class="kpi-note">${esc(note)}</div></div>`).join('');
-    }
-
-    function renderNotice() {
-      const d = state.data; const q = d?.data_quality;
-      if (!d) { $('notice').innerHTML = ''; return; }
-      if (d.error) { $('notice').innerHTML = `<div class="quality error">${esc(d.error)}</div>`; return; }
-      $('notice').innerHTML = `<div class="quality"><strong>Точность:</strong> ${esc(q?.note || 'state.db aggregate + agent.log')} ` +
-        `· per-call tokens: <span class="mono">${fmt.format(q?.per_api_call_tokens || 0)}</span> · cost in dashboard is aggregate, not fabricated per request.</div>`;
-    }
-
-    function renderDaily() {
-      const rows = state.data?.daily || []; const el = $('dailyChart');
-      if (!rows.length) { el.innerHTML = '<div class="empty">Нет данных за период.</div>'; return; }
-      const max = Math.max(1, ...rows.map(r => Number(r.input_tokens || 0) + Number(r.output_tokens || 0)));
-      const bars = rows.map(r => { const input = Number(r.input_tokens || 0), output = Number(r.output_tokens || 0); const total = input + output; const ih = Math.max(input ? 2 : 0, input / max * 168), oh = Math.max(output ? 2 : 0, output / max * 168); return `<div class="bar-cell"><div class="bar-tip"><b>${esc(r.day)}</b><br>in ${esc(fullTokens(input))}<br>out ${esc(fullTokens(output))}<br>${esc(r.source || '')}</div><div class="bar-stack"><div class="bar-in" style="height:${ih}px"></div><div class="bar-out" style="height:${oh}px"></div></div></div>`; }).join('');
-      el.innerHTML = `<div class="bars">${bars}</div><div class="chart-axis"><span>${esc(rows[0].day)}</span><span>${esc(rows[Math.floor(rows.length/2)]?.day || '')}</span><span>${esc(rows[rows.length-1].day)}</span></div>`;
-    }
-
-    function renderEvents() {
-      const events = state.data?.live_events || []; $('eventMeta').textContent = `${events.length} последних`;
-      if (!events.length) { $('liveEvents').innerHTML = '<div class="empty">В логах нет распознанных событий за период.</div>'; return; }
-      $('liveEvents').innerHTML = events.slice(0, 80).map(e => {
-        const isApi = e.kind === 'api_call', isAux = e.kind === 'aux_summary';
-        const label = isApi ? `API #${e.call_number ?? '?'}` : isAux ? `aux · ${e.task}` : `tool · ${e.tool}`;
-        const sub = isApi ? `${e.model} · ${e.provider} · ${e.input_tokens == null ? '?' : tokens(e.input_tokens)} in / ${e.output_tokens == null ? '?' : tokens(e.output_tokens)} out` : (e.session_id || 'unscoped');
-        const badge = isApi ? 'api' : isAux ? 'aux' : 'tool';
-        return `<div class="event"><div class="event-time">${esc(time(e.time ? new Date(e.timestamp * 1000).toISOString() : null))}</div><div class="event-main"><div class="event-title">${esc(label)}</div><div class="event-sub">${esc(sub)}</div></div><span class="badge ${badge}">${esc(e.session_id || '—')}</span></div>`;
-      }).join('');
-    }
-
-    function tableEmpty(text) { return `<div class="empty">${esc(text)}</div>`; }
-    function renderModels() {
-      const rows = sorted(visibleModels(), state.sorts.model); const el = $('modelTable');
-      if (!rows.length) { el.innerHTML = tableEmpty('Нет model usage.'); return; }
-      el.innerHTML = `<table><thead><tr><th>${sortButton('Модель','model','model')}</th><th>${sortButton('Провайдер','provider','model')}</th><th>${sortButton('Задача','task','model')}</th><th class="right">${sortButton('Токены','total_tokens','model')}</th><th class="right">${sortButton('API','api_calls','model')}</th><th class="right">Стоимость</th></tr></thead><tbody>` + rows.map(r => `<tr><td class="mono truncate">${esc(r.model)}</td><td class="muted">${esc(r.provider)}</td><td><span class="badge">${esc(r.task)}</span></td><td class="right number">${esc(tokens(r.total_tokens))}</td><td class="right number">${esc(fmt.format(r.api_calls || 0))}</td><td class="right number">${esc(money(r.cost_usd))}</td></tr>`).join('') + '</tbody></table>';
-    }
-    function renderTasks() {
-      const rows = sorted(visibleTasks(), state.sorts.task); const el = $('taskTable');
-      if (!rows.length) { el.innerHTML = tableEmpty('Нет подзадач.'); return; }
-      el.innerHTML = `<table><thead><tr><th>${sortButton('Задача','task','task')}</th><th class="right">${sortButton('Токены','total_tokens','task')}</th><th class="right">${sortButton('API','api_calls','task')}</th><th class="right">Стоимость</th></tr></thead><tbody>` + rows.map(r => `<tr><td><span class="badge">${esc(r.task)}</span><div class="event-sub">${esc((r.models || []).join(', '))}</div></td><td class="right number">${esc(tokens(r.total_tokens))}</td><td class="right number">${esc(fmt.format(r.api_calls || 0))}</td><td class="right number">${esc(money(r.cost_usd))}</td></tr>`).join('') + '</tbody></table>';
-    }
-    function renderTools() {
-      const rows = sorted(state.data?.tools || [], state.sorts.tool); const el = $('toolTable');
-      if (!rows.length) { el.innerHTML = tableEmpty('Инструменты появятся после первого вызова.'); return; }
-      el.innerHTML = `<table><thead><tr><th>${sortButton('Инструмент','name','tool')}</th><th class="right">${sortButton('Вызовы','count','tool')}</th><th class="right">Доля</th></tr></thead><tbody>` + rows.map(r => `<tr><td class="mono">${esc(r.name)}</td><td class="right number">${esc(fmt.format(r.count || 0))}</td><td class="right number">${esc(Number(r.percentage || 0).toFixed(1))}%</td></tr>`).join('') + '</tbody></table>';
-    }
-    function renderSessions() {
-      const rows = sorted(state.data?.sessions || [], state.sorts.session); const el = $('sessionTable'); $('sessionMeta').textContent = `${rows.length} последних · клик открывает карту`;
-      if (!rows.length) { el.innerHTML = tableEmpty('Нет сессий за период.'); return; }
-      el.innerHTML = `<table><thead><tr><th>${sortButton('Запрос / сессия','display_label','session')}</th><th>${sortButton('Модель','model','session')}</th><th>Провайдер</th><th class="right">${sortButton('Токены','input_tokens','session')}</th><th class="right">Инструменты</th><th class="right">Последняя активность</th></tr></thead><tbody>` + rows.map(r => `<tr class="clickable ${r.id === state.sessionId ? 'selected' : ''}" data-session="${esc(r.id)}"><td><div class="truncate">${esc(r.display_label)}</div><div class="event-sub mono">${esc(r.id)} · ${esc(r.source || '')}</div></td><td class="mono truncate">${esc(r.model || '—')}</td><td class="muted">${esc(r.billing_provider || '—')}</td><td class="right number">${esc(tokens((r.input_tokens || 0) + (r.output_tokens || 0) + (r.cache_read_tokens || 0) + (r.cache_write_tokens || 0)))}</td><td class="right number">${esc(fmt.format(r.tool_call_count || 0))}</td><td class="right muted">${esc(date(r.last_activity_at_iso))}</td></tr>`).join('') + '</tbody></table>';
-    }
-
-    function nodeLayout(nodes) {
-      const order = { parent: 0, session: 0, subtask: 0, request: 1, api: 2, tool: 3, result: 3, task: 4, skill: 5 };
-      const groups = {};
-      nodes.forEach(n => (groups[n.kind] ||= []).push(n));
-      const cols = { 0: 100, 1: 285, 2: 480, 3: 670, 4: 855, 5: 1035 };
-      const positions = {};
-      Object.entries(groups).forEach(([kind, list]) => { const x = cols[order[kind] ?? 0]; list.forEach((n, i) => { positions[n.id] = { x, y: 38 + i * 72 }; }); });
-      return positions;
-    }
-    function renderGraph() {
-      const svg = $('graphSvg'); const g = state.graph;
-      if (!g || !g.nodes?.length) { svg.innerHTML = ''; $('graphMeta').textContent = g?.error || 'выберите сессию выше'; $('inspector').innerHTML = `<div class="empty">${esc(g?.error || 'Кликните по сессии.')}</div>`; return; }
-      const pos = nodeLayout(g.nodes); const line = g.edges.map(e => { const a=pos[e.source], b=pos[e.target]; return a && b ? `<line class="graph-edge" x1="${a.x+54}" y1="${a.y+17}" x2="${b.x-8}" y2="${b.y+17}"/>` : ''; }).join('');
-      const nodes = g.nodes.map(n => { const p = pos[n.id]; const label = String(n.label || '').length > 24 ? String(n.label).slice(0,23)+'…' : String(n.label || ''); const detail = n.kind === 'api' ? `${tokens(n.meta?.input_tokens)} in` : n.kind === 'task' ? `${tokens(n.meta?.tokens)} tok` : n.kind; return `<g class="graph-node ${esc(n.kind)} ${n.id === state.nodeId ? 'selected' : ''}" data-node="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect width="116" height="36"></rect><text x="8" y="15">${esc(label)}</text><text x="8" y="29" class="tiny">${esc(detail)}</text></g>`; }).join('');
-      svg.innerHTML = `<rect width="1080" height="510" fill="#0b1017"></rect>${line}${nodes}`;
-      $('graphMeta').textContent = `${g.nodes.length} узлов · ${g.edges.length} связей${g.truncated ? ' · log events: последние 320' : ''} · сессия ${g.session_id}`;
-      const selected = g.nodes.find(n => n.id === state.nodeId) || g.nodes.find(n => n.kind === 'session') || g.nodes[0];
-      state.nodeId = selected?.id;
-      renderInspector(selected);
-    }
-    function renderInspector(node) {
-      if (!node) { $('inspector').innerHTML = '<div class="empty">Кликните по узлу карты.</div>'; return; }
-      const meta = node.meta || {}; const pairs = Object.entries(meta).filter(([,v]) => v !== null && v !== undefined && v !== '').map(([k,v]) => `<dt>${esc(k)}</dt><dd class="mono">${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</dd>`).join('');
-      const content = meta.content ? `<h3>Текст запроса</h3><pre class="prompt">${esc(meta.content)}</pre>` : '';
-      $('inspector').innerHTML = `<h3>${esc(node.label)}</h3><dl class="kv"><dt>тип</dt><dd><span class="badge">${esc(node.kind)}</span></dd><dt>время</dt><dd>${esc(node.timestamp ? new Date(node.timestamp * 1000).toLocaleString('ru-RU') : '—')}</dd>${pairs}</dl>${content}`;
-    }
-    async function loadGraph(id) { state.sessionId = id; state.nodeId = null; renderSessions(); $('graphMeta').textContent = 'загрузка карты…'; try { state.graph = await getJSON('/api/graph?session_id=' + encodeURIComponent(id)); renderGraph(); } catch (e) { state.graph = { error: e.message, nodes: [] }; renderGraph(); } }
-
-    function renderAll() { renderFilters(); renderNotice(); renderKpis(); renderDaily(); renderEvents(); renderModels(); renderTasks(); renderTools(); renderSessions(); renderGraph(); const h = state.data?.source; $('sourceMeta').textContent = h ? `state.db: ${h.db} · ${state.data.generated_at ? new Date(state.data.generated_at*1000).toLocaleTimeString('ru-RU') : ''}` : 'источник не прочитан'; }
-    async function loadSnapshot(force = false) { try { const data = await getJSON('/api/snapshot?days=' + state.days + (force ? '&t=' + Date.now() : '')); state.data = data; renderAll(); setStatus('', 'live · ' + new Date().toLocaleTimeString('ru-RU')); if (state.sessionId) await loadGraph(state.sessionId); } catch (e) { setStatus('err', 'ошибка чтения'); $('notice').innerHTML = `<div class="quality error">${esc(e.message)}</div>`; } }
-    async function heartbeat() { try { const h = await getJSON('/api/heartbeat'); const previous = state.data?.signature?.hash; if (!previous || previous !== h.signature.hash) await loadSnapshot(); else setStatus('', 'live · ' + new Date().toLocaleTimeString('ru-RU')); } catch (e) { setStatus('err', 'нет связи'); } }
-
-    document.addEventListener('click', (event) => {
-      const target = event.target.closest('[data-days],[data-sort],[data-session],[data-node]'); if (!target) return;
-      if (target.dataset.days) { state.days = Number(target.dataset.days); document.querySelectorAll('[data-days]').forEach(b => b.classList.toggle('active', b.dataset.days === String(state.days))); loadSnapshot(true); return; }
-      if (target.dataset.sort) { const scope=target.dataset.scope, key=target.dataset.sort; state.sorts[scope]=key; state.dirs[key] = (state.dirs[key] || 'desc') === 'desc' ? 'asc' : 'desc'; if (scope==='model') renderModels(); else if(scope==='task') renderTasks(); else if(scope==='tool') renderTools(); else renderSessions(); return; }
-      if (target.dataset.session) { loadGraph(target.dataset.session); return; }
-      if (target.dataset.node) { state.nodeId = target.dataset.node; renderGraph(); }
-    });
-    ['providerFilter','modelFilter','taskFilter'].forEach(id => $(id).addEventListener('change', e => { state.filters[id.replace('Filter','')] = e.target.value; renderModels(); renderTasks(); }));
-    $('refreshBtn').addEventListener('click', () => loadSnapshot(true));
-    loadSnapshot(true);
-    setInterval(heartbeat, 2000);
-  </script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .vscode/
+
+# Сгенерированные демо-данные Hermes (создаются скриптом demo/make_demo_data.py)
+demo/home/
