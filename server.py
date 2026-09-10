@@ -97,7 +97,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/config":
                 self._send_json({
                     "poll_ms": self.app.poll_ms,
-                    "default_days": 30,
+                    "default_days": 7,
                     "read_only": True,
                     "title": "Hermes Usage Monitor",
                 })
