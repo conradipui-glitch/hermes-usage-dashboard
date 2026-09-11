@@ -242,7 +242,7 @@ def _event_id(event: dict[str, Any], message: str) -> str:
     return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:20]
 
 
-def _read_log_events(paths: Iterable[Path], cutoff: float, limit: int = 2000) -> list[dict[str, Any]]:
+def _read_log_events(paths: Iterable[Path], cutoff: float, limit: int | None = None) -> list[dict[str, Any]]:
     seen: set[str] = set()
     events: list[dict[str, Any]] = []
     for path in paths:
@@ -262,7 +262,56 @@ def _read_log_events(paths: Iterable[Path], cutoff: float, limit: int = 2000) ->
             seen.add(event_id)
             events.append(event)
     events.sort(key=lambda item: (item.get("timestamp") or 0, item.get("event_id", "")), reverse=True)
-    return events[:limit]
+    # Ротация содержит десятки тысяч событий: агрегаты считаются по всем в пределах окна,
+    # а limit применяется только там, где список уходит в UI.
+    return events[:limit] if limit else events
+
+
+def discover_log_paths(logs_dir: Path) -> list[Path]:
+    """All rotating agent logs: agent.log first, then agent.log.1, .2, … (read-only)."""
+    paths: list[Path] = []
+    base = logs_dir / "agent.log"
+    if base.is_file():
+        paths.append(base)
+    numbered: list[tuple[int, Path]] = []
+    try:
+        candidates = list(logs_dir.glob("agent.log.*"))
+    except OSError:
+        candidates = []
+    for path in candidates:
+        suffix = path.name.rsplit(".", 1)[-1]
+        if suffix.isdigit():
+            try:
+                if path.is_file():
+                    numbered.append((int(suffix), path))
+            except OSError:
+                continue
+    paths.extend(path for _, path in sorted(numbered))
+    return paths
+
+
+def _row_matches_filter(row: dict[str, Any], filters: dict[str, str]) -> bool:
+    model = (filters.get("model") or "").strip()
+    provider = (filters.get("provider") or "").strip()
+    task = (filters.get("task") or "").strip()
+    if model and (row.get("model") or "") != model:
+        return False
+    if provider and (row.get("billing_provider") or "") != provider:
+        return False
+    if task and (row.get("task") or "main_agent") != task:
+        return False
+    return True
+
+
+def _event_matches_filter(event: dict[str, Any], filters: dict[str, str]) -> bool:
+    """Log events carry model/provider but no task: a task-only filter cannot narrow them."""
+    model = (filters.get("model") or "").strip()
+    provider = (filters.get("provider") or "").strip()
+    if model and (event.get("model") or "") != model:
+        return False
+    if provider and (event.get("provider") or "") != provider:
+        return False
+    return True
 
 
 def build_signature(db_path: Path, log_paths: Iterable[Path]) -> dict[str, Any]:
@@ -350,11 +399,19 @@ class HermesReader:
         hermes_home = resolve_hermes_home()
         self.db_path = Path(db_path) if db_path else hermes_home / "state.db"
         self.db_path = self.db_path.expanduser().resolve()
+        self.logs_dir = hermes_home / "logs"
+        self._auto_logs = log_paths is None
         if log_paths is None:
-            log_paths = (hermes_home / "logs" / "agent.log", hermes_home / "logs" / "agent.log.1")
+            log_paths = discover_log_paths(self.logs_dir) or [self.logs_dir / "agent.log"]
         self.log_paths = [Path(path).expanduser().resolve() for path in log_paths]
 
     def heartbeat(self) -> dict[str, Any]:
+        if self._auto_logs:
+            # Ротация меняет состав файлов на ходу (agent.log → .1 → .2): без перечитывания
+            # списка свежий agent.log.2 оставался бы невидимым до перезапуска панели.
+            discovered = discover_log_paths(self.logs_dir)
+            if discovered:
+                self.log_paths = discovered
         signature = build_signature(self.db_path, self.log_paths)
         return {
             "signature": signature,
@@ -364,13 +421,41 @@ class HermesReader:
             "observed_at": time.time(),
         }
 
-    def snapshot(self, days: int = 30, session_limit: int = 250) -> dict[str, Any]:
+    def snapshot(
+        self,
+        days: int = 30,
+        session_limit: int = 250,
+        filters: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         days = max(1, min(int(days), 3650))
         cutoff = time.time() - days * 86400
         signature = self.heartbeat()["signature"]
         events = _read_log_events(self.log_paths, cutoff)
+        filters = {
+            "provider": (filters or {}).get("provider") or "",
+            "model": (filters or {}).get("model") or "",
+            "task": (filters or {}).get("task") or "",
+        }
+        filter_active = any(filters.values())
+        filter_echo = {
+            "active": filter_active,
+            **filters,
+            "scope": {
+                "kpis": "filtered" if filter_active else "period",
+                "daily": "filtered" if filter_active else "period",
+                "spend": "filtered" if filter_active else "period",
+                "models": "filtered" if filter_active else "period",
+                "tasks": "filtered" if filter_active else "period",
+                "sessions": "filtered" if filter_active else "period",
+                # В логе есть модель и провайдер, но нет задачи: фильтр по задаче ленту и
+                # скорости не сужает — панели честно помечаются «весь период».
+                "rates": "filtered" if filter_active and (filters["model"] or filters["provider"]) else "period",
+                "tools": "period",
+                "skills": "period",
+            },
+        }
         if not self.db_path.is_file():
-            return self._empty_snapshot(days, signature, "state.db not found")
+            return self._empty_snapshot(days, signature, "state.db not found", filter_echo)
 
         try:
             conn = _open_readonly(self.db_path)
@@ -378,17 +463,31 @@ class HermesReader:
             return self._empty_snapshot(days, signature, f"state.db unavailable: {exc}")
         try:
             sessions_all = self._sessions(conn, cutoff, None)
-            sessions = sessions_all[:max(1, min(int(session_limit), 1000))]
             session_ids = {row["id"] for row in sessions_all}
+            usage_rows = self._usage_rows(conn, cutoff, session_ids)
+            # Фильтр сужает весь срез целиком — KPI, графики, расходы, таблицы, ленту, —
+            # чтобы цифры в разных блоках не противоречили друг другу.
+            if filter_active:
+                usage_rows = [row for row in usage_rows if _row_matches_filter(row, filters)]
+                if not usage_rows:
+                    return self._empty_snapshot(
+                        days, signature, "под выбранным фильтром нет данных", filter_echo,
+                    )
+                matched_sessions = {row.get("session_id") for row in usage_rows}
+                sessions_all = [row for row in sessions_all if row.get("id") in matched_sessions]
+            stat_events = [event for event in events if _event_matches_filter(event, filters)]
+            sessions = sessions_all[:max(1, min(int(session_limit), 1000))]
             latest_requests = self._latest_requests(conn, {row["id"] for row in sessions})
             sessions_public = [_public_session(row, latest_requests.get(row["id"], "")) for row in sessions]
-            usage_rows = self._usage_rows(conn, cutoff, session_ids)
             models = self._group_models(usage_rows)
             tasks = self._group_tasks(usage_rows)
             tools, skills = self._tool_and_skill_breakdown(conn, cutoff)
-            daily = self._daily_breakdown(sessions_all, usage_rows, events, days)
+            daily = self._daily_breakdown(
+                sessions_all, usage_rows, stat_events, days,
+                mode="filtered" if filter_active else "period",
+            )
             descendants = sum(1 for row in sessions_all if row.get("parent_session_id"))
-            summary = self._summary(sessions_all, usage_rows, events, descendants)
+            summary = self._summary(sessions_all, usage_rows, stat_events, descendants)
             return {
                 "generated_at": time.time(),
                 "period_days": days,
@@ -399,9 +498,13 @@ class HermesReader:
                 "tasks": tasks,
                 "tools": tools,
                 "skills": skills,
+                "model_rates": self._model_rates(stat_events),
+                "recent_model_rates": self._recent_model_rates(stat_events),
+                "daily_models": self._daily_models(usage_rows, days),
                 "sessions": sessions_public,
-                "live_events": events[:250],
-                "data_quality": self._data_quality(usage_rows, events),
+                "live_events": stat_events[:250],
+                "filter": filter_echo,
+                "data_quality": self._data_quality(usage_rows, stat_events),
                 "source": {
                     "db": str(self.db_path),
                     "logs": [str(path) for path in self.log_paths],
@@ -413,6 +516,40 @@ class HermesReader:
             return self._empty_snapshot(days, signature, f"state.db query failed: {exc}")
         finally:
             conn.close()
+
+    def filter_options(self, days: int = 30) -> dict[str, Any]:
+        """Полные списки провайдеров/моделей/задач за период — для выпадающих фильтров.
+
+        Списки намеренно не сужаются активным фильтром: иначе из выпадающего списка
+        исчезли бы остальные варианты и фильтр нельзя было бы переключить.
+        """
+        days = max(1, min(int(days), 3650))
+        cutoff = time.time() - days * 86400
+        empty: dict[str, Any] = {"period_days": days, "providers": [], "models": [], "tasks": [], "error": None}
+        if not self.db_path.is_file():
+            return {**empty, "error": "state.db not found"}
+        try:
+            conn = _open_readonly(self.db_path)
+        except (OSError, sqlite3.Error) as exc:
+            return {**empty, "error": f"state.db unavailable: {exc}"}
+        try:
+            sessions = self._sessions(conn, cutoff, None)
+            rows = self._usage_rows(conn, cutoff, {row["id"] for row in sessions})
+        except sqlite3.Error as exc:
+            return {**empty, "error": f"state.db query failed: {exc}"}
+        finally:
+            conn.close()
+
+        def uniq(values: Iterable[Any]) -> list[str]:
+            return sorted({str(value) for value in values if value})
+
+        return {
+            "period_days": days,
+            "providers": uniq(row.get("billing_provider") for row in rows),
+            "models": uniq(row.get("model") for row in rows),
+            "tasks": uniq(row.get("task") or "main_agent" for row in rows),
+            "error": None,
+        }
 
     def graph(self, session_id: str) -> dict[str, Any]:
         if not self.db_path.is_file():
@@ -550,7 +687,7 @@ class HermesReader:
 
             cutoff = 0
             session_events = [
-                event for event in _read_log_events(self.log_paths, cutoff, limit=1500)
+                event for event in _read_log_events(self.log_paths, cutoff, limit=6000)
                 if event.get("session_id") == session_id
                 and event.get("kind") in {"api_call", "aux_summary"}
             ]
@@ -782,21 +919,205 @@ class HermesReader:
             result.append(item)
         return sorted(result, key=lambda item: (-item["total_tokens"], item["task"]))
 
+    def _model_rates(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Average generation speed per model from exact log observations.
+
+        Speed = output tokens / total response latency over timed calls with
+        known usage. Calls without latency or with unavailable usage are
+        counted separately and never invented.
+        """
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        for event in events:
+            if event.get("kind") != "api_call":
+                continue
+            key = (event.get("model") or "unknown", event.get("provider") or "unknown")
+            item = grouped.setdefault(key, {
+                "model": key[0], "provider": key[1], "calls": 0, "timed_calls": 0,
+                "latency_seconds": 0.0, "input_tokens": 0, "output_tokens": 0,
+                "cache_read_tokens": 0, "unmeasured_calls": 0, "peak_tokens_per_second": 0.0,
+                "call_speeds": [],
+            })
+            item["calls"] += 1
+            latency = _as_float(event.get("latency_seconds"))
+            in_tokens = event.get("input_tokens")
+            out_tokens = event.get("output_tokens")
+            if latency > 0 and in_tokens is not None and out_tokens is not None:
+                item["timed_calls"] += 1
+                item["latency_seconds"] += latency
+                item["input_tokens"] += _as_int(in_tokens)
+                item["output_tokens"] += _as_int(out_tokens)
+                item["cache_read_tokens"] += _as_int(event.get("cache_read_tokens"))
+                call_speed = _as_int(out_tokens) / latency
+                item["call_speeds"].append(call_speed)
+                if call_speed > item["peak_tokens_per_second"]:
+                    item["peak_tokens_per_second"] = call_speed
+            else:
+                item["unmeasured_calls"] += 1
+        result = []
+        for item in grouped.values():
+            latency = item["latency_seconds"]
+            timed = item["timed_calls"]
+            item["avg_latency_seconds"] = (latency / timed) if timed else None
+            item["output_tokens_per_second"] = (item["output_tokens"] / latency) if latency > 0 else None
+            item["input_tokens_per_second"] = (item["input_tokens"] / latency) if latency > 0 else None
+            item["peak_tokens_per_second"] = round(item["peak_tokens_per_second"], 1) if timed else None
+            # Рабочий потолок для шкалы «сейчас»: 95-й перцентиль скоростей
+            # отдельных вызовов. Редкие всплески коротких вызовов не задирают
+            # шкалу, стрелка чаще живёт в рабочем диапазоне модели.
+            speeds = sorted(item.pop("call_speeds"))
+            item["scale_tokens_per_second"] = (
+                round(speeds[min(len(speeds) - 1, int(len(speeds) * 0.95))], 1) if speeds else None
+            )
+            item["latency_seconds"] = round(latency, 3)
+            result.append(item)
+        return sorted(result, key=lambda item: (-item["calls"], item["model"]))
+
+    @staticmethod
+    def _recent_model_rates(events: list[dict[str, Any]], window_seconds: float = 180.0) -> list[dict[str, Any]]:
+        """Speed over the LAST timed calls per model, as a "right now" gauge.
+
+        Takes up to 10 most recent timed api_call observations per model and
+        computes the same aggregates over that tail, ignoring the long period
+        averages. A model gets a tail entry only when its latest timed call is
+        within `window_seconds` of the newest timed call in the log — so the
+        gauges go quiet instead of showing stale "now" speeds. Nothing is
+        invented: unknown latency/usage stays out, exactly like the period view.
+        """
+        newest_ts = 0.0
+        timed_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for event in events:
+            if event.get("kind") != "api_call":
+                continue
+            latency = _as_float(event.get("latency_seconds"))
+            if latency <= 0 or event.get("input_tokens") is None or event.get("output_tokens") is None:
+                continue
+            key = (event.get("model") or "unknown", event.get("provider") or "unknown")
+            timed_by_key.setdefault(key, []).append(event)
+            newest_ts = max(newest_ts, float(event.get("timestamp") or 0))
+        now = time.time()
+        result = []
+        for key, calls in timed_by_key.items():
+            # Events arrive newest-first (live feed order); the "now" tail must
+            # be the NEWEST observations, so slice from the head of that list.
+            tail = calls[:10]
+            latency = sum(_as_float(c.get("latency_seconds")) for c in tail)
+            output = sum(_as_int(c.get("output_tokens")) for c in tail)
+            input_tokens = sum(_as_int(c.get("input_tokens")) for c in tail)
+            latest_ts = max(float(c.get("timestamp") or 0) for c in tail)
+            age = max(0.0, now - latest_ts)
+            fresh = 0 < age <= window_seconds
+            result.append({
+                "model": key[0],
+                "provider": key[1],
+                "window_seconds": round(window_seconds),
+                "tail_calls": len(tail),
+                "age_seconds": round(age, 1),
+                "fresh": fresh,
+                "avg_latency_seconds": (latency / len(tail)) if tail else None,
+                "output_tokens_per_second": (output / latency) if latency > 0 else None,
+                "input_tokens_per_second": (input_tokens / latency) if latency > 0 else None,
+                "last_latency_seconds": _as_float(tail[-1].get("latency_seconds")),
+                "last_output_tokens": _as_int(tail[-1].get("output_tokens")),
+                "last_timestamp": latest_ts,
+            })
+        return sorted(result, key=lambda item: (-(item["last_timestamp"]), item["model"]))
+
+    def _daily_models(
+        self,
+        usage_rows: list[dict[str, Any]],
+        days: int,
+    ) -> list[dict[str, Any]]:
+        """Per-day cost/tokens split by model, consistent with the models table.
+
+        Each aggregate row is anchored to its last accounting timestamp.
+        Only the top 6 models per day are listed; the rest merge into "other".
+        """
+        per_day: dict[str, dict[tuple[str, str], dict[str, Any]]] = defaultdict(dict)
+        for row in usage_rows:
+            ts = row.get("last_seen") or row.get("first_seen")
+            if not ts:
+                continue
+            try:
+                day = datetime.fromtimestamp(float(ts)).date().isoformat()
+            except (TypeError, ValueError, OSError):
+                continue
+            key = (row.get("model") or "unknown", row.get("billing_provider") or "unknown")
+            cell = per_day[day].setdefault(key, {
+                "model": key[0], "provider": key[1], "cost_usd": 0.0,
+                "total_tokens": 0, "api_calls": 0,
+            })
+            cost = _as_float(row.get("actual_cost_usd")) or _as_float(row.get("estimated_cost_usd"))
+            cell["cost_usd"] += cost
+            cell["total_tokens"] += self._usage_tokens(row)
+            cell["api_calls"] += _as_int(row.get("api_call_count"))
+        rank = {
+            key: index
+            for index, key in enumerate(sorted(
+                {key for cells in per_day.values() for key in cells},
+                key=lambda key: (
+                    -sum(cells.get(key, {}).get("cost_usd", 0.0) for cells in per_day.values()),
+                    -sum(cells.get(key, {}).get("total_tokens", 0) for cells in per_day.values()),
+                    key,
+                ),
+            ))
+        }
+        result = []
+        for day in sorted(per_day):
+            cells = sorted(per_day[day].values(), key=lambda cell: (-cell["cost_usd"], -cell["total_tokens"]))
+            top, rest = cells[:6], cells[6:]
+            models = [{**cell, "rank": rank[(cell["model"], cell["provider"])]} for cell in top]
+            if rest:
+                models.append({
+                    "model": "Прочие", "provider": "", "rank": 6,
+                    "cost_usd": sum(cell["cost_usd"] for cell in rest),
+                    "total_tokens": sum(cell["total_tokens"] for cell in rest),
+                    "api_calls": sum(cell["api_calls"] for cell in rest),
+                })
+            result.append({
+                "day": day,
+                "total_cost_usd": sum(cell["cost_usd"] for cell in cells),
+                "total_tokens": sum(cell["total_tokens"] for cell in cells),
+                "models": models,
+            })
+        return result[-max(days, 1):]
+
     def _daily_breakdown(
         self,
         sessions: list[dict[str, Any]],
         usage_rows: list[dict[str, Any]],
         events: list[dict[str, Any]],
         days: int,
+        mode: str = "period",
     ) -> list[dict[str, Any]]:
         by_day: dict[str, dict[str, Any]] = defaultdict(lambda: {
             "day": "", "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
             "cache_write_tokens": 0, "reasoning_tokens": 0, "api_calls": 0, "sessions": 0,
             "estimated_cost_usd": 0.0, "actual_cost_usd": 0.0, "source": "state.db aggregate",
         })
+        day_sessions: dict[str, set[str]] = defaultdict(set)
+        if mode == "filtered":
+            # Под фильтром опираемся только на подходящие строки state.db: складывать
+            # полные суммы сессий нельзя — в них есть и другие модели. День строки берём
+            # по её собственному времени учёта, иначе сегодняшние токены падали бы на день
+            # старта разговора и не сходились с наблюдениями из лога.
+            for row in usage_rows:
+                ts = row.get("last_seen") or row.get("first_seen")
+                if not ts:
+                    continue
+                day = datetime.fromtimestamp(_as_float(ts)).date().isoformat()
+                item = by_day[day]
+                item["day"] = day
+                item["source"] = "state.db aggregate (фильтр)"
+                for field in _TOKEN_FIELDS:
+                    item[field] += _as_int(row.get(field))
+                item["estimated_cost_usd"] += _as_float(row.get("estimated_cost_usd"))
+                item["actual_cost_usd"] += _as_float(row.get("actual_cost_usd"))
+                item["api_calls"] += _as_int(row.get("api_call_count"))
+                if row.get("session_id"):
+                    day_sessions[day].add(row["session_id"])
         # Main totals are anchored to the session start, matching Hermes' existing analytics
         # semantics. Auxiliary rows are anchored to their last persisted accounting timestamp.
-        for session in sessions:
+        for session in ([] if mode == "filtered" else sessions):
             day = datetime.fromtimestamp(session.get("started_at") or time.time()).date().isoformat()
             item = by_day[day]
             item["day"] = day
@@ -806,7 +1127,7 @@ class HermesReader:
             item["estimated_cost_usd"] += _as_float(session.get("estimated_cost_usd"))
             item["actual_cost_usd"] += _as_float(session.get("actual_cost_usd"))
             item["api_calls"] += _as_int(session.get("api_call_count"))
-        for row in usage_rows:
+        for row in ([] if mode == "filtered" else usage_rows):
             if not row.get("task"):
                 continue
             ts = row.get("last_seen") or row.get("first_seen")
@@ -850,6 +1171,9 @@ class HermesReader:
             item["observed_cache_write_tokens"] = exact["cache_write_tokens"]
             item["observed_api_calls"] = exact["api_calls"]
             item["source"] = "state.db aggregate + agent.log observed subset"
+        if mode == "filtered":
+            for day, item in by_day.items():
+                item["sessions"] = len(day_sessions.get(day, ()))
         return sorted(by_day.values(), key=lambda item: item["day"])[-max(days, 1):]
 
     def _summary(
@@ -905,28 +1229,37 @@ class HermesReader:
     def _usage_tokens(row: dict[str, Any]) -> int:
         return sum(_as_int(row.get(field)) for field in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"))
 
-    @staticmethod
-    def _data_quality(usage_rows: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[str, Any]:
+    def _data_quality(self, usage_rows: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "state_db_usage_rows": len(usage_rows),
             "log_event_rows": len(events),
+            "log_files": [path.name for path in self.log_paths],
+            "log_events_truncated": False,
             "per_api_call_tokens": sum(1 for event in events if event.get("kind") == "api_call" and event.get("usage_status") == "available"),
             "aggregate_only_cost": True,
             "note": "Per-call token counts come from agent.log; per-task/model cost comes from state.db aggregate rows.",
         }
 
     @staticmethod
-    def _empty_snapshot(days: int, signature: dict[str, Any], error: str) -> dict[str, Any]:
+    def _empty_snapshot(
+        days: int,
+        signature: dict[str, Any],
+        error: str,
+        filter_echo: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return {
             "generated_at": time.time(), "period_days": days, "signature": signature,
+            "filter": filter_echo or {"active": False, "provider": "", "model": "", "task": "", "scope": {}},
             "summary": {"sessions": 0, "total_tokens": 0, "api_calls": 0}, "daily": [], "models": [],
-            "tasks": [], "tools": [], "skills": [], "sessions": [], "live_events": [],
+            "tasks": [], "tools": [], "skills": [], "model_rates": [], "recent_model_rates": [], "daily_models": [],
+            "sessions": [], "live_events": [],
             "data_quality": {}, "source": {"read_only": True}, "error": error,
         }
 
 
 __all__ = [
     "HermesReader",
+    "discover_log_paths",
     "build_signature",
     "parse_agent_log_line",
     "resolve_hermes_home",

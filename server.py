@@ -20,7 +20,9 @@ class DashboardApp:
         self.reader = reader
         self.poll_ms = max(500, min(int(poll_ms), 60000))
         self._lock = threading.Lock()
-        self._cache: dict[int, tuple[str, dict]] = {}
+        self._cache: dict[tuple, tuple[str, dict]] = {}
+        self._options_cache: dict[tuple, tuple[str, dict]] = {}
+        self._graph_cache: dict[str, tuple[str, dict]] = {}
 
     def heartbeat(self) -> dict:
         return {
@@ -28,25 +30,63 @@ class DashboardApp:
             "poll_ms": self.poll_ms,
         }
 
-    def snapshot(self, days: int) -> dict:
+    def snapshot(self, days: int, filters: dict[str, str] | None = None) -> dict:
         days = max(1, min(int(days), 3650))
+        clean = {
+            "provider": (filters or {}).get("provider") or "",
+            "model": (filters or {}).get("model") or "",
+            "task": (filters or {}).get("task") or "",
+        }
+        key = (days, clean["provider"], clean["model"], clean["task"])
         heartbeat = self.reader.heartbeat()
         signature = heartbeat["signature"]["hash"]
         with self._lock:
-            cached = self._cache.get(days)
+            cached = self._cache.get(key)
             if cached and cached[0] == signature:
                 return cached[1]
-            data = self.reader.snapshot(days=days)
-            self._cache[days] = (data["signature"]["hash"], data)
-            # Keep the cache bounded when the user clicks through many periods.
-            if len(self._cache) > 8:
+            data = self.reader.snapshot(days=days, filters=clean)
+            self._cache[key] = (data["signature"]["hash"], data)
+            # Keep the cache bounded when the user clicks through many periods/filters.
+            if len(self._cache) > 12:
                 oldest = next(iter(self._cache))
-                if oldest != days:
+                if oldest != key:
                     self._cache.pop(oldest, None)
             return data
 
+    def options(self, days: int) -> dict:
+        """Полные списки для выпадающих фильтров: фильтр не должен сужать сам себя."""
+        healthy = self.heartbeat()
+        signature = healthy["signature"]["hash"]
+        key = ("options", days)
+        with self._lock:
+            cached = self._options_cache.get(key)
+            if cached and cached[0] == signature:
+                return cached[1]
+        data = self.reader.filter_options(days=days)
+        with self._lock:
+            self._options_cache[key] = (signature, data)
+            if len(self._options_cache) > 4:
+                first = next(iter(self._options_cache))
+                if first != key:
+                    self._options_cache.pop(first, None)
+        return data
+
     def graph(self, session_id: str) -> dict:
-        return self.reader.graph(session_id)
+        """Граф разговора пересобирается только при изменении источников."""
+        heartbeat = self.reader.heartbeat()
+        signature = heartbeat["signature"]["hash"]
+        with self._lock:
+            cached = self._graph_cache.get(session_id)
+            if cached and cached[0] == signature:
+                return cached[1]
+        data = self.reader.graph(session_id)
+        with self._lock:
+            self._graph_cache[session_id] = (signature, data)
+            if len(self._graph_cache) > 6:
+                first = next(iter(self._graph_cache))
+                if first != session_id:
+                    self._graph_cache.pop(first, None)
+        return data
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -107,7 +147,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/snapshot":
                 days = int(query.get("days", [30])[0])
-                self._send_json(self.app.snapshot(days))
+                filters = {
+                    "provider": (query.get("provider", [""])[0])[:200],
+                    "model": (query.get("model", [""])[0])[:200],
+                    "task": (query.get("task", [""])[0])[:200],
+                }
+                self._send_json(self.app.snapshot(days, filters))
+                return
+            if parsed.path == "/api/options":
+                days = int(query.get("days", [30])[0])
+                self._send_json(self.app.options(days))
                 return
             if parsed.path == "/api/graph":
                 session_id = query.get("session_id", [""])[0]
@@ -144,10 +193,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     home = resolve_hermes_home(args.hermes_home)
-    reader = HermesReader(
-        db_path=home / "state.db",
-        log_paths=(home / "logs" / "agent.log", home / "logs" / "agent.log.1"),
-    )
+    # Логи не перечисляем руками: ридер сам берёт всю ротацию (agent.log, .1, .2 …)
+    # и обновляет список на ходу, когда Hermes проворачивает файлы.
+    reader = HermesReader(db_path=home / "state.db")
     app = DashboardApp(reader, poll_ms=args.poll_ms)
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]
